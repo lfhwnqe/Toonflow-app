@@ -13,6 +13,7 @@ export type NodeAiModel = {
   protocol: "openai-completions" | "openai-responses" | "anthropic-messages";
   contextWindow?: number;
   maxOutputTokens?: number;
+  isDefault?: boolean;
 };
 export type NodeMediaModel = Omit<MediaModel, "mode"> & {
   mode?: (string | string[])[];
@@ -122,14 +123,14 @@ async function readModels<T>(url: string, signal: AbortSignal): Promise<T[]> {
   }
 }
 
-async function requestModel(input: NodeAiRequest, context: Context, model: Model<NodeAiModel["protocol"]>, signal: AbortSignal) {
+async function requestModel(input: NodeAiRequest, context: Context, model: Model<NodeAiModel["protocol"]>, signal: AbortSignal, taskId: string) {
   const { providerId, modelId, references, directory, onEvent } = input;
   const stream = createAssistantMessageEventStream();
   try {
     signal.throwIfAborted();
     const response = await fetch("/api/ai/generate", {
       method: "POST", headers: { "Content-Type": "application/json", "x-toonflow-workspace": "1" },
-      body: JSON.stringify({ providerId, modelId, context, directory, references }), signal,
+      body: JSON.stringify({ providerId, modelId, context, directory, references, taskId }), signal,
     });
     if (!response.ok) await readResult(response);
     if (!response.body || !response.headers.get("content-type")?.includes("text/event-stream")) throw new Error("AI 未返回 SSE 数据流");
@@ -294,19 +295,33 @@ export function useNodeAi() {
       },
     }));
     let turns = 0;
-    const messages = await runAgentLoop([{ role: "user", content: prompt, timestamp: Date.now() }], {
-      systemPrompt: systemPrompt ?? "", messages: [], tools,
-    }, {
-      model, convertToLlm: messages => messages as Message[], toolExecution: "sequential",
-      shouldStopAfterTurn: ({ message }) => ++turns >= 40 || message.stopReason === "length",
-    }, event => {
+    const taskId = crypto.randomUUID();
+    const cancel = () => {
+      if (providerId === "codex") void fetch("/api/ai/cancel", {
+        method: "POST", headers: { "Content-Type": "application/json", "x-toonflow-workspace": "1" }, body: JSON.stringify({ taskId }), keepalive: true,
+      }).catch(() => {});
+    };
+    callSignal.addEventListener("abort", cancel, { once: true });
+    let messages: Awaited<ReturnType<typeof runAgentLoop>>;
+    try {
       callSignal.throwIfAborted();
-      if (event.type === "tool_execution_start") onEvent?.({ type: "toolStart", id: event.toolCallId, name: event.toolName, args: event.args });
-      if (event.type === "tool_execution_end" && onEvent) {
-        const text = (event.result as AgentToolResult<unknown>).content.filter(part => part.type === "text").map(part => part.text).join("\n");
-        onEvent({ type: "toolEnd", id: event.toolCallId, name: event.toolName, result: event.isError ? text : JSON.parse(text), isError: event.isError });
-      }
-    }, callSignal, (_model, context) => requestModel(input, context, model, callSignal));
+      messages = await runAgentLoop([{ role: "user", content: prompt, timestamp: Date.now() }], {
+        systemPrompt: systemPrompt ?? "", messages: [], tools,
+      }, {
+        model, convertToLlm: messages => messages as Message[], toolExecution: "sequential",
+        shouldStopAfterTurn: ({ message }) => ++turns >= 40 || message.stopReason === "length",
+      }, event => {
+        callSignal.throwIfAborted();
+        if (event.type === "tool_execution_start") onEvent?.({ type: "toolStart", id: event.toolCallId, name: event.toolName, args: event.args });
+        if (event.type === "tool_execution_end" && onEvent) {
+          const text = (event.result as AgentToolResult<unknown>).content.filter(part => part.type === "text").map(part => part.text).join("\n");
+          onEvent({ type: "toolEnd", id: event.toolCallId, name: event.toolName, result: event.isError ? text : JSON.parse(text), isError: event.isError });
+        }
+      }, callSignal, (_model, context) => requestModel(input, context, model, callSignal, taskId));
+    } finally {
+      callSignal.removeEventListener("abort", cancel);
+      cancel();
+    }
     callSignal.throwIfAborted();
     const message = messages.findLast((message): message is AssistantMessage => message.role === "assistant");
     if (!message) throw new Error("AI 未返回结果");

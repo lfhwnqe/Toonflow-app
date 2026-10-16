@@ -7,12 +7,21 @@ import type { AgentImageReference } from "@/agent/runtime/imageAttachments";
 import { getRequestFiles, type RequestFile } from "@/utils/ai/requestFiles";
 import { createFileTransport, FileRequestLimitError } from "@/utils/ai/files";
 import conf from "@/utils/conf";
+import { cancelCodexTask } from "@/utils/ai/codexStream";
 
 function contentHash(value: unknown) {
   return createHash("sha256").update(JSON.stringify(value)).digest("hex");
 }
 
-export function configureAgentRequests(session: AgentSession, limits?: { maxRequestImageBytes?: number; maxRequestBytes?: number }) {
+export function configureAgentRequests(session: AgentSession, limits?: { maxRequestImageBytes?: number; maxRequestBytes?: number }, signal?: AbortSignal) {
+  const codexTaskId = randomUUID();
+  const cancel = () => cancelCodexTask(codexTaskId);
+  signal?.addEventListener("abort", cancel, { once: true });
+  session.subscribe(event => {
+    if (event.type !== "agent_end") return;
+    signal?.removeEventListener("abort", cancel);
+    cancel();
+  });
   for (const value of Object.values(limits ?? {})) {
     if (value !== undefined && (!Number.isSafeInteger(value) || value <= 0)) throw new Error("图片请求预算必须为正安全整数");
   }
@@ -180,6 +189,7 @@ export function configureAgentRequests(session: AgentSession, limits?: { maxRequ
           const request = files.fetch;
           const stream = await streamFunction(model, requestContext, {
             ...options,
+            ...(model.provider === "codex" ? { sessionId: codexTaskId } : {}),
             apiKey,
             onPayload: async (payload, requestModel) => {
               try {

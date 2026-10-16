@@ -35,7 +35,7 @@
             </el-option-group>
           </el-select>
           <div class="promptActions">
-            <el-button class="sendButton" :icon="IconArrowUp" :loading="generating" :disabled="!prompt.trim() || !selectedModel || generating || !textReady" title="生成" aria-label="生成" @click="generateText" />
+            <el-button class="sendButton" :icon="generating ? IconPlayerStop : IconArrowUp" :disabled="!generating && (!prompt.trim() || !selectedModel || !textReady)" :title="generating ? '停止生成' : '生成'" :aria-label="generating ? '停止生成' : '生成'" @click="generating ? generationController?.abort() : generateText()" />
           </div>
         </div>
       </el-card>
@@ -49,9 +49,9 @@
 </template>
 
 <script setup lang="ts">
-import { computed, inject, onMounted, ref, watch } from "vue";
+import { computed, inject, onMounted, onScopeDispose, ref, watch } from "vue";
 import { ElAlert, ElButton, ElCard, ElSelect, ElDialog, ElOption, ElOptionGroup, ElMessage, ElMessageBox } from "element-plus";
-import { IconEdit, IconFileText, IconSparkles, IconArrowUp } from "@tabler/icons-vue";
+import { IconEdit, IconFileText, IconSparkles, IconArrowUp, IconPlayerStop } from "@tabler/icons-vue";
 import { nodeSkeleton, nodeTools, useNode, z, type NodeAiModel, type NodeHandle } from "@toonflow/nodes-scaffold/runtime";
 import { groupNodeModels } from "@toonflow/node-shared/groupNodeModels";
 import { useNodeReferences } from "@toonflow/node-shared/useNodeReferences";
@@ -93,6 +93,7 @@ const model = computed({ get: () => data.value.model ?? "", set: (value: string)
 const models = ref<NodeAiModel[]>([]);
 const modelsLoading = ref(false);
 const generating = ref(false);
+let generationController: AbortController | undefined;
 const selectedModel = computed(() => models.value.find(item => JSON.stringify([item.providerId, item.modelId]) === model.value));
 const modelGroups = computed(() => groupNodeModels(models.value));
 const textReady = ref(false);
@@ -204,7 +205,20 @@ nodeEvent.on("copy", () => {
   return { textPath: undefined, textSnapshot: outputs.value.text.value };
 });
 
-onMounted(loadModels);
+function refreshModels(event: Event) {
+  if (event.type === "toonflow:plugin-installed" && (event as CustomEvent<{ type?: string }>).detail?.type !== "provider") return;
+  void loadModels();
+}
+onMounted(() => {
+  void loadModels();
+  window.addEventListener("toonflow:provider-config-changed", refreshModels);
+  window.addEventListener("toonflow:plugin-installed", refreshModels);
+});
+onScopeDispose(() => {
+  generationController?.abort();
+  window.removeEventListener("toonflow:provider-config-changed", refreshModels);
+  window.removeEventListener("toonflow:plugin-installed", refreshModels);
+});
 
 async function loadModels() {
   if (modelsLoading.value) return;
@@ -212,7 +226,7 @@ async function loadModels() {
   try {
     models.value = await ai.getModels();
     if (!model.value) {
-      const first = models.value[0];
+      const first = models.value.find(item => item.isDefault);
       model.value = first ? JSON.stringify([first.providerId, first.modelId]) : "";
     }
   } catch (error) {
@@ -225,6 +239,7 @@ async function loadModels() {
 async function generateText() {
   const choice = selectedModel.value;
   if (!textReady.value || generating.value || !choice || !prompt.value.trim()) return;
+  const controller = generationController = new AbortController();
   generating.value = true;
   let text = "";
   try {
@@ -237,17 +252,19 @@ async function generateText() {
     const result = await ai.generate({
       ...input,
       directory,
+      signal: controller.signal,
       onEvent(event) {
         if (event.type === "text") outputs.value.text.value = text += event.delta;
       },
     });
     outputs.value.text.value = result.text;
   } catch (error) {
-    if (error instanceof Error && error.name !== "AbortError") ElMessage.error(error.message);
+    if (!controller.signal.aborted && error instanceof Error) ElMessage.error(error.message);
   } finally {
     // 卸载会取消请求并停止 watcher，生成收尾必须自行保存已收到的正文。
     try { await saveText(outputs.value.text.value); }
     catch (error) { ElMessage.error(error instanceof Error ? error.message : "文本保存失败"); }
+    generationController = undefined;
     generating.value = false;
   }
 }

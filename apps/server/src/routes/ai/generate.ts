@@ -52,15 +52,18 @@ const contextSchema: z.ZodType<Context> = z.object({
 }).refine(context => Buffer.byteLength(JSON.stringify(context)) <= 8000000, "模型上下文不能超过 8 MB");
 
 const inputSchema = z.object({
-  providerId: z.string().min(1), modelId: z.string().min(1),
+  providerId: z.string().default(""), modelId: z.string().default(""),
+  taskId: z.uuid().optional(),
   context: contextSchema,
   directory: z.string().min(1).max(4096).optional(),
   references: z.array(u.ai.aiReferenceSchema).max(32).optional(),
 });
 
 export default Router().post("/", validateFields(inputSchema.shape), async (req, res) => {
+  u.mcpControl.assertAppRequest(req);
   const input = inputSchema.parse(req.body, validationOptions());
   const configured = u.ai.getConfiguredModel(input.providerId, input.modelId);
+  if (configured.providerId === "codex" && !input.taskId) throw Object.assign(new Error("Codex 节点请求必须携带稳定的任务 UUID，请更新节点插件"), { status: 400 });
   const controller = new AbortController();
   let heartbeat: ReturnType<typeof setInterval> | undefined;
   const close = () => { clearInterval(heartbeat); controller.abort(); };
@@ -72,7 +75,7 @@ export default Router().post("/", validateFields(inputSchema.shape), async (req,
     const directory = input.references?.some(item => item.dataType !== "STRING")
       ? await u.workspace.resolveWorkspace(req, input.directory ?? "") : undefined;
     const references = await u.ai.readAiReferences(directory, input.references ?? [], controller.signal, configured.provider);
-    const stream = u.ai.streamAi(configured, input.context, controller.signal, references);
+    const stream = u.ai.streamAi(configured, input.context, controller.signal, references, input.taskId);
     res.set({ "Content-Type": "text/event-stream; charset=utf-8", "Cache-Control": "no-cache, no-transform", "X-Accel-Buffering": "no" });
     res.flushHeaders();
     heartbeat = setInterval(() => {

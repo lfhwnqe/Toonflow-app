@@ -417,6 +417,29 @@ bun run start:server
 
 ---
 
+### 4.6 本机 Codex 与即梦迁移版
+
+此源码版内置 Codex 文本和图片供应商。先在本机安装官方 Codex CLI 并完成 ChatGPT 登录；Toonflow 复用 CLI 当前登录，不读取或复制凭据，也不要求 OpenAI API Key。设置 → 语言模型中的 Codex 面板可刷新登录和模型状态，CLI 路径留空时自动查找，也可填写绝对路径。
+
+未指定模型的新文本任务默认使用 Codex；语言模型设置可明确更换默认模型。已有会话、节点和其他供应商配置保留，旧节点继续显示其原模型，可手动切换。历史工具调用只作为上下文导入，不自动重放。TF-Router 余额只属于 TF-Router。
+
+文本节点生成期间可点击停止，保留并保存已收到的正文。节点和 Agent 取消会立即通知 Codex 宿主，不等待工具执行结束；CLI 启动握手阶段也响应取消。服务重启后拒绝续接旧工具结果，包含子 Agent 补充报告时同样不重新提交。
+
+图片生成节点可选择“Codex · 原生文生图”，首期支持单张、9:16 构图，界面显示实际原生像素尺寸。参考图、局部重绘、打光和多角度暂不支持。原生图片单回合可能包含多次内部调用，不能保证仅消耗一张额度；失败或取消后不会自动补生成。
+
+macOS 开发启动（Bun 1.3.14；需要 Xcode Command Line Tools）：
+
+```sh
+bun install --frozen-lockfile
+bun apps/desktop/node_modules/electrobun/bin/electrobun.cjs prepare
+bun packages/startup/scripts/buildMac.ts
+appVersion=2.0.0-codexNative bun run dev:desktop
+```
+
+开发窗口标题为 `Toonflow · Codex Native`，配置和插件使用仓库 `data/`，项目文件保存在用户选择的工作目录。构建在 `build/desktop/app/`，不会替换 `/Applications/toonflow.app`。回退时退出开发版并打开原应用；不要让两个实例同时编辑同一项目。退出、配置变更或连接异常会关闭受管 Codex 子进程，未完成任务须由用户明确重新发起，不恢复提交旧工具或媒体任务。
+
+即梦插件已迁入 [`packages/tools/dreamina`](packages/tools/dreamina/readme.md)，开发启动会同步至开发数据目录；详细配置、旧任务保留和恢复边界见该包说明。默认关闭联网与生成，开启后仍需逐次报价和人工确认。当前仅支持文生图、文生视频；已完成视频需从官方画布下载后导入，不把 Codex 原生图片能力作为即梦参考图视频能力。旧计划、账本、私有签名及提交记录必须保留，不能通过删除记录重复生成。
+
 ## 5. 🎬 作品示例
 
 https://github.com/user-attachments/assets/2d9fddac-dfdf-4640-b030-b09d7f7287e9

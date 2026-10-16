@@ -27,7 +27,7 @@ import axios from "axios";
 import { onBeforeUnmount, onMounted, ref } from "vue";
 import { ElMessage } from "element-plus";
 import workspacePicker from "@/pages/home/workspacePicker.vue";
-import { modelChoices } from "@/stores/settings";
+import { defaultTextModel, modelChoices } from "@/stores/settings";
 
 type A2aSettings = { enabled: boolean; directory: string; token?: string; url: string; providerId?: string; modelId?: string; thinkingLevel?: string };
 const emit = defineEmits<{ saved: []; closed: [] }>();
@@ -65,7 +65,7 @@ function applySettings(value: A2aSettings) {
   if (!value || typeof value.enabled !== "boolean" || typeof value.directory !== "string") throw new Error("A2A 设置格式错误");
   enabled.value = value.enabled;
   directory.value = value.directory;
-  selectedModel.value = value.providerId && value.modelId ? JSON.stringify([value.providerId, value.modelId]) : "";
+  selectedModel.value = value.providerId && value.modelId ? JSON.stringify([value.providerId, value.modelId]) : defaultTextModel.value;
   thinkingLevel.value = value.thinkingLevel;
   token.value = value.token ?? "";
   url.value = value.url;

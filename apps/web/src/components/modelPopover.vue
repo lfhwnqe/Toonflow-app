@@ -12,7 +12,7 @@
       <template #reference>
         <el-button class="modelButton" text :disabled="disabled" aria-label="模型与推理设置">
           <modelIcon v-if="selectedModelChoice" :model="selectedModelChoice.modelId" :size="14" />
-          <span class="modelName">{{ selectedModelChoice?.label ?? "选择模型" }}</span>
+          <span class="modelName">{{ selectedModelChoice?.label ?? (selectedModel ? `原模型不可用：${selectedModel}` : "选择模型") }}</span>
           ·
           <span class="reasoningLabel">{{ reasoningLabel }}</span>
           <component :is="visible ? IconChevronUp : IconChevronDown" :size="14" aria-hidden="true" />
@@ -44,7 +44,7 @@
 import { computed, ref, watch } from "vue";
 import { IconChevronDown, IconChevronUp } from "@tabler/icons-vue";
 import { modelIcon } from "@toonflow/model-icons";
-import { customProviders, modelChoices } from "@/stores/settings";
+import { availableProviders, defaultTextModel, modelChoices } from "@/stores/settings";
 
 const selectedModel = defineModel<string>({ default: "" });
 const reasoningEffort = defineModel<string>("reasoningEffort", { default: "" });
@@ -56,11 +56,11 @@ const reasoningOptions = [
   { label: "中", value: "medium" },
   { label: "高", value: "high" },
 ];
-const modelGroups = computed(() => customProviders.value.toSorted((left, right) => Number(right.id === "tfRouter") - Number(left.id === "tfRouter")));
+const modelGroups = availableProviders;
 const selectedModelChoice = computed(() => modelChoices.value.find(item => item.value === selectedModel.value));
 const reasoningLabel = computed(() => reasoningOptions.find(item => item.value === reasoningEffort.value)?.label ?? "默认");
-watch(modelChoices, items => {
-  if (!selectedModel.value) selectedModel.value = items[0]?.value ?? "";
+watch([modelChoices, defaultTextModel], () => {
+  if (!selectedModel.value) selectedModel.value = defaultTextModel.value;
 }, { immediate: true });
 watch(() => !props.active || props.disabled, close => { if (close) visible.value = false; });
 </script>

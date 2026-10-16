@@ -14,15 +14,18 @@ export default router.put("/", validateFields({ settings: z.record(z.string(), z
   desktopUpdateCustomUrl: z.string().max(2048).refine(value => !value || u.desktop.isValidUpdateUrl(value),
     "自定义更新源必须是不含账号、查询参数或锚点的 HTTP(S) 地址").optional(),
   mcp: z.object({ enabled: z.boolean().optional(), token: z.string().optional(), port: z.number().int().min(1).max(65535).optional() }).optional(),
+  codex: u.ai.codexConfigSchema.optional(),
+  defaultTextModel: z.object({ providerId: z.string().min(1), modelId: z.string().min(1) }).optional(),
 })).refine(value => value.desktopUpdateSource !== "custom" || !!value.desktopUpdateCustomUrl, {
   path: ["desktopUpdateCustomUrl"], message: "选择自定义更新源前，请先填写有效地址",
 }) }), async (req, res) => {
   u.mcpControl.assertAppRequest(req);
   const { settings } = req.body;
+  delete settings.builtinProviders;
   u.removeLegacySettings(settings);
   u.cleanNodeMenuSettings(settings);
   const previousSettings = u.conf.get("settings", {});
   u.conf.set("settings", settings);
   const [models] = await Promise.all([u.ai.refreshProviderModels(previousSettings), u.mcpRuntime.reloadMcpRuntime()]);
-  res.json(success({ ...models, nodeMenu: u.conf.get("settings.general.nodeMenu") ?? null }, "设置已保存"));
+  res.json(success({ ...models, builtinProviders: [u.ai.getCodexProvider()], defaultTextModel: u.ai.getDefaultAiModel(), nodeMenu: u.conf.get("settings.general.nodeMenu") ?? null }, "设置已保存"));
 });

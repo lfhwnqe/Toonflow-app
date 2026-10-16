@@ -12,6 +12,7 @@ import conf from "@/utils/conf";
 import { convertAudio } from "@/utils/media/audioProcessor";
 import { createWorkspaceFfmpeg } from "@/utils/ffmpeg";
 import { lockWorkspaceFiles, writeWorkspaceFile } from "@/utils/workspace/files";
+import { codexMediaSource, generateCodexImage } from "@/utils/media/codex";
 
 type Expression = Extract<ReturnType<typeof parseExpression>, { type: "ParenthesizedExpression" }>["expression"];
 type ObjectExpression = Extract<Expression, { type: "ObjectExpression" }>;
@@ -248,6 +249,7 @@ async function readProvider(path: string, fileName: string) {
 }
 
 export async function getMediaProvider(id: string) {
+  if (id === "codex") return { ...metadata("codex.ts", codexMediaSource), source: codexMediaSource };
   if (!providerIdSchema.safeParse(id).success) invalid("供应商 ID 无效");
   const path = await directory();
   if (!path) invalid("请先在媒体模型设置中添加供应商", 404);
@@ -259,10 +261,11 @@ export async function getMediaProvider(id: string) {
 }
 
 export async function listMediaProviders() {
+  const builtin = metadata("codex.ts", codexMediaSource);
   const path = await directory();
-  if (!path) return [];
+  if (!path) return [builtin];
   const files = await readdir(path, { withFileTypes: true });
-  return Promise.all(files.filter(file => file.isFile() && mediaProviderFileSchema.safeParse(file.name).success)
+  return [builtin, ...await Promise.all(files.filter(file => file.name !== "codex.ts" && file.isFile() && mediaProviderFileSchema.safeParse(file.name).success)
     .sort((left, right) => left.name.localeCompare(right.name)).map(async file => {
       let current = { fileName: file.name, id: file.name.slice(0, -3), source: "", revision: "" };
       try {
@@ -273,11 +276,12 @@ export async function listMediaProviders() {
         const { source, ...file } = current;
         return { ...file, label: current.id, version: "", readme: "", rules: [], models: [], loadError: translateMessage(error instanceof Error ? error.message : "供应商文件无法读取") };
       }
-    }));
+    }))];
 }
 
 export async function addMediaProvider(source: string) {
   const result = validateMediaProviderSource(source);
+  if (result.id === "codex") invalid("Codex 是内置供应商，无需安装或覆盖", 409);
   const { fileName } = result;
   const path = join((await directory(true))!, fileName);
   const release = lockWorkspaceFiles([path]);
@@ -291,6 +295,7 @@ export async function addMediaProvider(source: string) {
 }
 
 export async function saveMediaProvider(fileName: string, models: z.infer<typeof mediaModelsSchema>, revision: string, expectedApiKey?: string) {
+  if (fileName === "codex.ts") invalid("Codex 图片能力由宿主管理，请在文本模型中配置本机 Codex");
   if (!mediaProviderFileSchema.safeParse(fileName).success) invalid("供应商文件名无效");
   const checked = mediaModelsSchema.safeParse(models, validationOptions());
   if (!checked.success) invalid(checked.error.issues.map(issue => translateMessage(issue.message)).join("; "));
@@ -367,6 +372,7 @@ export async function refreshMediaProviderModels(fileName: string, revision?: st
 }
 
 export async function deleteMediaProvider(fileName: string, revision: string) {
+  if (fileName === "codex.ts") invalid("Codex 是内置供应商，不能删除");
   if (!mediaProviderFileSchema.safeParse(fileName).success) invalid("供应商文件名无效");
   const path = await directory();
   if (!path) invalid("供应商文件不存在", 404);
@@ -398,6 +404,10 @@ export async function loadMediaProviderSource(source: string, config: Record<str
   await module.evaluate({ timeout: 1000 });
   signal?.throwIfAborted();
   const definition = (module.namespace as { default: Provider }).default;
+  if (id === "codex") {
+    if (source !== codexMediaSource) invalid("Codex 内置供应商不能被外部源码覆盖");
+    definition.generateImage = request => generateCodexImage(request, signal);
+  }
   // ACT: 已安装 TF-Router 仅补齐缺省查询能力，保留用户适配代码与模型列表。
   if (id === tfRouter.id) {
     definition.getPrice ??= tfRouter.getPrice;

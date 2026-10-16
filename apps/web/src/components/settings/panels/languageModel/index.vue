@@ -1,5 +1,6 @@
 <template>
   <div class="providerList">
+    <codexSettings />
     <div class="itemList">
       <el-card v-for="item in sortedProviders" :key="item.id" class="providerItem" shadow="never">
         <div class="providerHeader">
@@ -49,6 +50,7 @@ import { languageProviders } from "@toonflow/providers";
 import logoUrl from "@toonflow/assets/logo.svg";
 import tfAccount from "../../tfAccount.vue";
 import { isTfRouterProvider } from "@/lib/tf";
+import codexSettings from "./codexSettings.vue";
 
 const { visible = true } = defineProps<{ visible?: boolean }>();
 const addProviderDialog = shallowRef<Component>();

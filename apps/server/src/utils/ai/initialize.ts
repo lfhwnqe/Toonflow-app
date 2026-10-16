@@ -3,6 +3,7 @@ import tfRouterMedia from "@toonflow/providers/media/tfRouter";
 import conf from "@/utils/conf";
 import { fetchProviderModels } from "@/utils/ai/models";
 import { getMediaProviderApiKey, refreshMediaProviderModels } from "@/utils/media/provider";
+import { getCodexStatus } from "@/utils/ai/codexHost";
 
 let initialization: Promise<void> | undefined;
 
@@ -65,7 +66,7 @@ export async function refreshProviderModels(previousSettings?: Record<string, un
 
 export default function initializeProviderModels() {
   // ACT: 每个进程启动时仅尝试一次；失败保留已有模型，下次启动再更新。
-  return initialization ??= refreshProviderModels().then(result => {
+  return initialization ??= Promise.all([getCodexStatus(), refreshProviderModels()]).then(([, result]) => {
     result.modelRefreshErrors?.forEach(error => console.warn(error));
   });
 }

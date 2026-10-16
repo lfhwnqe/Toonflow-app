@@ -50,8 +50,8 @@ export async function run(
     attachments = [],
     mentions = [],
     cwd,
-    providerId,
-    modelId,
+    providerId = "",
+    modelId = "",
     thinkingLevel = "off",
     sessionFile,
     resendFrom,
@@ -99,7 +99,10 @@ export async function run(
     send({ type: "accepted" });
     return;
   }
-  const { provider, runtime } = await createAgentModel(providerId, modelId, thinkingLevel);
+  const configured = await createAgentModel(providerId, modelId, thinkingLevel);
+  const { provider, runtime } = configured;
+  providerId = configured.providerId;
+  modelId = configured.modelId;
   if (sessionPath) {
     const file = await stat(sessionPath).catch((error: NodeJS.ErrnoException) => {
       if (error.code === "ENOENT") throw Object.assign(new Error("会话不存在，请重新打开对话"), { status: 404 });
@@ -179,7 +182,7 @@ export async function run(
       tools: tools.map((tool) => tool.name),
       customTools: tools,
     });
-    configureAgentRequests(session);
+    configureAgentRequests(session, undefined, signal);
     active.session = session;
 
     const streamFunction = session.agent.streamFunction;

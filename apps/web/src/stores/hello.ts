@@ -1,6 +1,6 @@
 import { computed } from "vue";
 import { defineStore } from "pinia";
-import { customProviders, saveSettings, settings } from "@/stores/settings";
+import { availableProviders, customProviders, saveSettings, settings } from "@/stores/settings";
 
 export const useHelloStore = defineStore("hello", () => {
   const completed = computed(() => settings.value.helloCompleted === true);
@@ -13,7 +13,8 @@ export const useHelloStore = defineStore("hello", () => {
     } catch {
       // ACT: 旧缓存不可读时仍可从已配置的模型恢复；桌面随机端口之间无法迁移 localStorage。
     }
-    if (previouslyCompleted || customProviders.value.some(provider => typeof provider.apiKey === "string" && provider.apiKey.trim() && provider.models.length))
+    if (availableProviders.value.some(provider => provider.id === "codex" && provider.models.length)
+      || previouslyCompleted || customProviders.value.some(provider => typeof provider.apiKey === "string" && provider.apiKey.trim() && provider.models.length))
       await complete();
     return completed.value;
   }

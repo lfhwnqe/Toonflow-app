@@ -6,7 +6,7 @@ import u from "@/utils";
 
 const inputSchema = z.strictObject({
   sessionId: z.uuid(), runId: z.uuid(), prompt: z.string().trim().min(1).max(100000),
-  providerId: z.string().min(1).max(200), modelId: z.string().min(1).max(500),
+  providerId: z.string().max(200).default(""), modelId: z.string().max(500).default(""),
   thinkingLevel: z.enum(["off", "minimal", "low", "medium", "high", "xhigh"]).optional(),
 });
 

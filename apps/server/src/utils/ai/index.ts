@@ -2,7 +2,7 @@ import { openAICompletionsApi } from "@earendil-works/pi-ai/api/openai-completio
 import { openAIResponsesApi } from "@earendil-works/pi-ai/api/openai-responses.lazy";
 import { anthropicMessagesApi } from "@earendil-works/pi-ai/api/anthropic-messages.lazy";
 import { getBuiltinModels, getBuiltinProviders } from "@earendil-works/pi-ai/providers/all";
-import type { Context, Model } from "@earendil-works/pi-ai";
+import type { Context, Model, TextContent, ImageContent } from "@earendil-works/pi-ai";
 import { z } from "zod";
 import conf from "@/utils/conf";
 import { readReference } from "@/utils/media/generation";
@@ -13,6 +13,11 @@ import { readFile, stat } from "@toonflow/file";
 import { resolveWorkspacePath } from "@/utils/workspace/files";
 import { getReadableFileMimeType } from "@/lib/documentFormats";
 import { readDocument } from "@/utils/documents";
+import { getCodexProvider, getDefaultAiModel } from "@/utils/ai/codexHost";
+import { streamCodex } from "@/utils/ai/codexStream";
+
+export { getCodexProvider, getDefaultAiModel, getCodexStatus, codexConfigSchema } from "@/utils/ai/codexHost";
+export { cancelCodexTask } from "@/utils/ai/codexStream";
 
 export { fetchProviderModels } from "@/utils/ai/models";
 export { refreshProviderModels } from "@/utils/ai/initialize";
@@ -51,7 +56,14 @@ export function getModelLimits(providerId: string, model: z.infer<typeof provide
   };
 }
 
-export function getConfiguredModel(providerId: string, modelId: string) {
+export function getConfiguredModel(providerId = "", modelId = "") {
+  if (!providerId && !modelId) ({ providerId, modelId } = getDefaultAiModel());
+  if (providerId === "codex") {
+    const provider = getCodexProvider();
+    const model = provider.models.find(item => item.id === modelId);
+    if (!model) throw Object.assign(new Error("所选 Codex 模型不可用，请在设置中刷新本机模型状态"), { status: 400 });
+    return { providerId, modelId, provider, model, baseUrl: provider.apiUrl };
+  }
   const providers = conf.get("settings", {}).customProviders;
   const parsed = providerSchema.safeParse(Array.isArray(providers) ? providers.find(item => item?.id === providerId) : undefined);
   if (!parsed.success) throw Object.assign(new Error("请先在设置中配置模型供应商"), { status: 400 });
@@ -61,13 +73,13 @@ export function getConfiguredModel(providerId: string, modelId: string) {
   const baseUrl = new URL(provider.apiUrl);
   if (baseUrl.pathname === "/") baseUrl.pathname = "/v1";
   const limits = getModelLimits(providerId, model);
-  return { provider, model: { ...model, contextWindow: limits.contextWindow, maxOutputTokens: limits.maxTokens }, baseUrl: baseUrl.href.replace(/\/+$/, "") };
+  return { providerId, modelId, provider, model: { ...model, contextWindow: limits.contextWindow, maxOutputTokens: limits.maxTokens }, baseUrl: baseUrl.href.replace(/\/+$/, "") };
 }
 
 export function listAiModels() {
   const providers = conf.get("settings", {}).customProviders;
-  if (!Array.isArray(providers)) return [];
-  return providers.flatMap(item => {
+  const fallback = getDefaultAiModel();
+  return [getCodexProvider(), ...(Array.isArray(providers) ? providers.filter(item => item?.id !== "codex") : [])].flatMap(item => {
     const parsed = providerSchema.extend({ id: z.string().min(1), label: z.string() }).safeParse(item);
     if (!parsed.success) return [];
     const provider = parsed.data;
@@ -76,6 +88,7 @@ export function listAiModels() {
       return {
         providerId: provider.id, providerLabel: provider.label, protocol: provider.protocol, modelId: model.id, label: model.label,
         contextWindow: limits.contextWindow, maxOutputTokens: limits.maxTokens,
+        isDefault: provider.id === fallback.providerId && model.id === fallback.modelId,
       };
     });
   });
@@ -151,15 +164,31 @@ export function streamAi(
   context: Context,
   signal: AbortSignal,
   references: Awaited<ReturnType<typeof readAiReferences>> = [],
+  taskId?: string,
 ) {
   const { provider, model: configuredModel, baseUrl } = configured;
   const model: Model<typeof provider.protocol> = {
-    id: configuredModel.id, name: configuredModel.label, provider: "toonflow", api: provider.protocol, baseUrl,
+    id: configuredModel.id, name: configuredModel.label, provider: configured.providerId, api: provider.protocol, baseUrl,
     reasoning: false, input: ["text", "image"],
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     contextWindow: configuredModel.contextWindow,
     maxTokens: configuredModel.maxOutputTokens,
   };
+  if (configured.providerId === "codex") {
+    const messages = structuredClone(context.messages);
+    const firstUser = messages.find(message => message.role === "user");
+    if (firstUser && references.length) {
+      const content = typeof firstUser.content === "string" ? [{ type: "text" as const, text: firstUser.content }] : firstUser.content;
+      firstUser.content = [...content, ...references.flatMap<TextContent | ImageContent>(item => {
+        if (item.dataType === "STRING") return [{ type: "text" as const, text: item.value }];
+        if (item.dataType !== "IMAGE") throw new Error("Codex 文本入口暂不支持视频参考，请先提取关键帧");
+        const value = /^data:([^;]+);base64,(.*)$/s.exec(item.value);
+        if (!value) throw new Error("Codex 图片参考格式无效");
+        return [{ type: "image" as const, mimeType: value[1]!, data: value[2]! }];
+      })];
+    }
+    return streamCodex(model, { ...context, messages }, { signal, sessionId: taskId });
+  }
   const files = createFileTransport({ ...provider, apiUrl: baseUrl }, { signal });
   return aiApis[provider.protocol].streamSimple(model, context, {
     apiKey: provider.apiKey,

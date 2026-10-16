@@ -10,7 +10,7 @@ const inputSchema = z.object({
   prompt: z.string().trim(), directory: z.string().min(1),
   attachments: u.agent.agentAttachmentsSchema.optional(),
   mentions: u.agent.agentMentionsSchema.optional(),
-  providerId: z.string().min(1), modelId: z.string().min(1),
+  providerId: z.string().default(""), modelId: z.string().default(""),
   thinkingLevel: z.enum(["off", "low", "medium", "high"]).optional(),
   sessionFile: z.string().regex(/^[\w-]+\.jsonl$/).optional(),
   resendFrom: z.string().min(1).max(128).optional(),

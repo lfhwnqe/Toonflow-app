@@ -204,7 +204,7 @@ export async function run(options: {
       },
     }));
     const thinkingLevel = options.thinkingLevel ?? "off";
-    const { runtime } = await createAgentModel(options.providerId, options.modelId, thinkingLevel);
+    const { runtime, providerId, modelId } = await createAgentModel(options.providerId, options.modelId, thinkingLevel);
     active.controller.signal.throwIfAborted();
     const settingsManager = SettingsManager.inMemory({ compaction: { enabled: false }, retry: { enabled: false } });
     const agentDir = join(state.cwd, ".agent");
@@ -217,11 +217,11 @@ export async function run(options: {
     await resourceLoader.reload();
     active.controller.signal.throwIfAborted();
     const { session } = await createAgentSession({
-      cwd: state.cwd, agentDir, modelRuntime: runtime, model: runtime.getModel(options.providerId, options.modelId),
+      cwd: state.cwd, agentDir, modelRuntime: runtime, model: runtime.getModel(providerId, modelId),
       thinkingLevel, sessionManager: state.history, settingsManager, resourceLoader,
       tools: tools.map(tool => tool.name), customTools: tools,
     });
-    configureAgentRequests(session);
+    configureAgentRequests(session, undefined, active.controller.signal);
     active.session = session;
     active.controller.signal.throwIfAborted();
     const streamFunction = session.agent.streamFunction;

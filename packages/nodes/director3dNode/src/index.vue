@@ -289,7 +289,7 @@ async function loadModels() {
     const available = await ai.getModels();
     if (disposed) return;
     models.value = available;
-    const first = models.value[0];
+    const first = models.value.find(item => item.isDefault);
     // ACT: 只给空配置选默认模型，保留暂时不可用的旧选择。
     if (!model.value) model.value = first ? JSON.stringify([first.providerId, first.modelId]) : "";
   } catch (error) {

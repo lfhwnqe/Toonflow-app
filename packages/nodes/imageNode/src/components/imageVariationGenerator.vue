@@ -86,7 +86,7 @@ async function refreshModels() {
       ratioFromSource = !props.settings.ratio;
       inheritModelConfig = false;
     }
-    models.value = result.filter(item => item.type === "image");
+    models.value = result.filter(item => item.type === "image" && (!item.mode?.length || item.mode.some(mode => mode === "singleImage" || mode === "multiReference")));
     if (!props.settings.model) {
       const choice = models.value[0];
       props.settings.model = choice ? JSON.stringify([choice.providerId, choice.modelId]) : "";

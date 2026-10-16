@@ -94,9 +94,30 @@ export const customProviders = computed<CustomProvider[]>(() => Array.isArray(se
     && item.models.every((model: CustomProviderModel) => !!model && typeof model.id === "string" && typeof model.label === "string"))
   : []);
 
-export const modelChoices = computed(() => customProviders.value.flatMap(provider => provider.models.map(model => ({
-  value: JSON.stringify([provider.id, model.id]), providerId: provider.id, modelId: model.id, label: model.label, contextWindow: model.contextWindow,
+export const availableProviders = computed(() => [
+  ...(Array.isArray(settings.value.builtinProviders) ? settings.value.builtinProviders as CustomProvider[] : []),
+  ...customProviders.value.filter(provider => provider.id !== "codex"),
+]);
+export const defaultTextModel = computed(() => {
+  const value = settings.value.defaultTextModel as { providerId?: string; modelId?: string } | undefined;
+  return value?.providerId && value.modelId ? JSON.stringify([value.providerId, value.modelId]) : "";
+});
+export const modelChoices = computed(() => availableProviders.value.flatMap(provider => provider.models.map(model => ({
+  value: JSON.stringify([provider.id, model.id]), providerId: provider.id, modelId: model.id, label: `${provider.label} · ${model.label}`, contextWindow: model.contextWindow,
 }))));
+
+export async function refreshCodexStatus() {
+  const { data } = await axios.get("/api/ai/codex/status", { headers: { "x-toonflow-workspace": "1" }, timeout: 45000 });
+  if (data.code !== 200) throw new Error(data.message || "读取 Codex 状态失败");
+  applyingSettings = true;
+  try {
+    const providers = (settings.value.builtinProviders as CustomProvider[] | undefined) ?? [];
+    settings.value = { ...settings.value, builtinProviders: providers.map(provider => provider.id === "codex" ? { ...provider, models: data.data.models } : provider) };
+    invalidateNodeModels("language");
+    window.dispatchEvent(new Event("toonflow:provider-config-changed"));
+  } finally { applyingSettings = false; }
+  return data.data as { executable: string; authenticated: boolean; text: string; image: string; message: string; models: CustomProviderModel[] };
+}
 
 export async function loadSettings() {
   if (settingsReady) return;
@@ -117,15 +138,18 @@ export function saveSettings(update?: (current: Record<string, unknown>) => Reco
     const patch = update?.(settings.value);
     if (update && !patch) return false;
     const requestedNodeMenu = JSON.stringify(((patch?.general ?? settings.value.general) as { nodeMenu?: unknown } | undefined)?.nodeMenu);
-    const { data } = await axios.put<{ code: number; data: { customProviders?: CustomProvider[]; mediaProvider?: { id: string }; modelRefreshErrors?: string[]; nodeMenu?: StoredNodeMenuItem[] | null } | null }>(
+    const { data } = await axios.put<{ code: number; data: { customProviders?: CustomProvider[]; builtinProviders?: CustomProvider[]; defaultTextModel?: { providerId: string; modelId: string }; mediaProvider?: { id: string }; modelRefreshErrors?: string[]; nodeMenu?: StoredNodeMenuItem[] | null } | null }>(
       "/api/settings/save", { settings: { ...settings.value, ...patch } }, { headers: { "x-toonflow-workspace": "1" } },
     );
     if (data.code !== 200) throw new Error("保存设置失败");
     const providers = data.data?.customProviders;
-    if ((patch && Object.hasOwn(patch, "customProviders")) || providers) invalidateNodeModels("language");
+    const languageChanged = !!providers || !!patch && ["customProviders", "defaultTextModel", "codex"].some(key => Object.hasOwn(patch, key));
+    if (languageChanged) invalidateNodeModels("language");
     if (patch || providers) {
       applyingSettings = true;
-      try { settings.value = { ...settings.value, ...patch, ...(providers ? { customProviders: providers } : {}) }; }
+      try { settings.value = { ...settings.value, ...patch, ...(providers ? { customProviders: providers } : {}),
+        ...(data.data?.builtinProviders ? { builtinProviders: data.data.builtinProviders } : {}),
+        ...(data.data?.defaultTextModel ? { defaultTextModel: data.data.defaultTextModel } : {}) }; }
       finally { applyingSettings = false; }
     }
     if (data.data && Object.hasOwn(data.data, "nodeMenu")
@@ -146,6 +170,7 @@ export function saveSettings(update?: (current: Record<string, unknown>) => Reco
     if (patch && Object.hasOwn(patch, "mediaProviderConfigs")) {
       window.dispatchEvent(new Event("toonflow:provider-config-changed"));
     }
+    if (languageChanged) window.dispatchEvent(new Event("toonflow:provider-config-changed"));
     if (data.data?.modelRefreshErrors?.length) ElMessage.warning(`API Key 已保存，部分模型获取失败：${data.data.modelRefreshErrors.join("；")}`);
     return true;
   });
