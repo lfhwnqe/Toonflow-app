@@ -1,15 +1,16 @@
 import { z } from "zod";
 import { cliRunner, nodeIdValue } from "./runner";
 import { fail, uuid } from "./store";
+import { generationPrompt, generationReferences } from "./plan";
 import { authSchema, modelSchema, quoteSchema, resourcesSchema, showSchema, type Job, type Plan } from "./runtime";
 
 function mediaArgs(action: "save" | "submit", plan: Plan, job: Job, ceiling?: number) {
   const projectId = uuid(job.remoteProjectId);
   const nodeId = nodeIdValue(job.nodeId);
-  if ((plan.mediaType === "image" ? plan.mode !== "t2i" : plan.mode !== "t2v") || plan.references.length) fail("reference_mode_not_enabled");
   const args = ["node", action === "save" ? "create" : "edit", plan.mediaType, "--project-id", projectId,
     "--node-id", nodeId, "--update-id", uuid(action === "save" ? job.updateId : job.submitUpdateId),
-    "--title", `${plan.shotId} ${plan.storyboardVersion}`, "--mode", plan.mode, "--model", plan.model, "--prompt", plan.prompt];
+    "--title", `${plan.shotId} ${plan.storyboardVersion}`, "--mode", plan.mode, "--model", plan.model, "--prompt", generationPrompt(plan, job)];
+  for (const resourceId of generationReferences(plan, job)) args.push("--ref", `res:${resourceId}`);
   if (plan.params.count !== undefined) args.push("--count", "1");
   for (const key of ["ratio", "resolution", "duration"] as const) if (plan.params[key] !== undefined) args.push(`--${key}`, String(plan.params[key]));
   if (action === "submit") {
@@ -21,6 +22,12 @@ function mediaArgs(action: "save" | "submit", plan: Plan, job: Job, ceiling?: nu
 }
 
 export class mediaClient extends cliRunner {
+  async upload(job: Job, resourceId: string, path: string, name: string, signal?: AbortSignal) {
+    return z.object({ resourceId: z.string(), mediaType: z.string() }).parse(await this.execute([
+      "resource", "upload", "--project-id", uuid(job.remoteProjectId), "--resource-id", uuid(resourceId),
+      "--file", path, "--type", "image", "--name", name, "--import-kind", "external_generated",
+    ], signal));
+  }
   async version(signal?: AbortSignal) { return z.object({ version: z.string(), commit: z.string(), distribution: z.string() }).parse(await this.execute(["version"], signal, true)); }
   schema(signal?: AbortSignal) { return this.execute(["schema"], signal, true); }
   async auth(signal?: AbortSignal) { return authSchema.parse(await this.execute(["auth", "status"], signal)); }

@@ -4,6 +4,8 @@
 
 只用本轮实际提供的工具操作当前 Toonflow 画布。下面是当前合约；实时 `parameters` 是调用依据，宿主文档中的旧例不覆盖它。制作流程见入口，版本和结果记录见[状态与交付](stateAndDelivery.md)。
 
+视频执行遵循主技能的即梦 CLI 路由，先完成 PART A 提示词，再查询 dreaminaCapabilities。即梦路线用文本节点保存完整计划、参数与有序参考图路径，交给 dreamina 工具生成；下文的普通视频生成节点、连线与 node:generateVideo 仅用于用户明确选择 API 供应商的路线。
+
 ## 发现与绑定
 
 `getCanvas({})` 只返回激活画布概览；需要类型或画布列表时传 `include: ["nodeTypes"]` 或 `["canvases"]`。用 `findCanvasNodes` 按名称、类型或选择状态定位目标；已知节点 ID 时直接用 `getCanvasNodes` 读取必要字段，`getCanvasEdges` 读取局部连接，`getNodeTools` 发现函数与完整 schema。节点类型可能带运行时前缀，不硬编码。
@@ -49,7 +51,7 @@
 
 先用 `getCanvasNodes` 的 `ports` 检查源/目标端口的 ID、方向、类型，用 `getCanvasEdges` 检查已有连接。只把本段采用的媒体接给生成节点，不用连线表示阶段、批准或依赖索引。上游还在生成或未采用的候选不能成为正式参考。
 
-生成节点 `prompt` 是本次唯一执行提示词入口，通过 `node:setPrompt({prompt})` 写入。完整剧本和分镜文本节点保留内容依据，不再用 STRING 连线重复挂到生成节点；当前实现会把相连文本全文追加到 prompt。现有无关 STRING 引用在已授权编辑范围内移除，否则说明影响后暂停该生成。
+API 节点路线以生成节点 `prompt` 为执行提示词入口，通过 `node:setPrompt({prompt})` 写入。即梦路线以已回读的文本方案为依据，原样传给 dreaminaPrepare.prompt，有序参考图填入 references；宿主只转换引用标记，不改写剧情。完整剧本和分镜文本节点保留内容依据，不再用 STRING 连线重复挂到生成节点；当前实现会把相连文本全文追加到 prompt。现有无关 STRING 引用在已授权编辑范围内移除，否则说明影响后暂停该生成。
 
 当供应商/画布接口实际使用 `{{ref N}}` 作为传输引用时，`{{ref N}}` 只能对应本次真实连接顺序与类型，不能把计划清单顺序当作真实顺序。**这属于执行层映射，不授权把 PART A 已定稿 `Reference binding` 的原始节点/资产句柄改写成另一套用户可见提示词格式。** 当前需分批读取现场数据还原顺序，不存在 `getReferences` 工具：
 
@@ -72,12 +74,14 @@
 
 ## 生成前准备
 
+即梦路线按主技能及 dreamina 工具说明准备、保存草稿、报价、批准并提交；不调用 API 视频节点。下面的节点步骤用于图片生成和用户明确选择的 API 视频路线。
+
 1. 调用当前节点的 `node:getConfig`，核实可用模型、模式、参考类型与数量、画幅、图片尺寸或视频时长/分辨率、原生声音及音频输入能力。图片和视频的规格分开判断，不沿用不相关的默认值。
 2. 先接好实际素材，再读取当前匹配模式。通过 `node:setConfig` 设置配置：图片字段按 schema 使用 `providerId/modelId/size/ratio`；视频使用 `providerId/modelId/duration/resolution/ratio/mode/generateAudio`。只传所需且支持的字段，`providerId` 与 `modelId` 成对提供，mode 使用实际返回值。
 3. 写入完整提示词，再读配置与画布，核对实际 prompt、引用、规格和调用前 output。缺必要参考就停该生成并继续文稿；不能静默将图生图或多参改成无参考模式。
 4. 固定本次方案：对象、数量、完整提示词、参数、参考文件与用途/顺序、执行次数；展示并沿用或取得具体消耗算力授权。算力无法查询时明确未知，不把对话 Token 当媒体消耗。
 5. **临执行复核。** 用户回复后再次读取当前画布与配置，比对授权方案，包含节点、提示词、模式、声音、引用与数量。若发生变化，沿用仍匹配的对象；受影响对象重新展示差异并核对授权。不要以“已确认”执行界面后来被修改的配置。
-6. 前置和授权满足时，经 `nodeTools` 调用实际 `node:generateImage` 或 `node:generateVideo`，当前参数为 `{}`。不绕过画布改走直接媒体工具。
+6. 前置和授权满足时，经 `nodeTools` 调用实际 `node:generateImage` 或 `node:generateVideo`，当前参数为 `{}`。即梦视频走前述 dreamina 流程，其他节点任务不绕过画布改走直接媒体工具。
 
 读回与执行不是宿主提供的原子操作。复核后仍发生并发编辑时，本次输出不能仅凭当前 prompt 归因；保留尝试快照，标注依据待核实，不能承诺完全消除并发竞态。
 

@@ -10,7 +10,7 @@ type Scope = {
   pending: Map<string, { requestIds: (string | number)[]; name: string; arguments: Record<string, unknown>; delivered: boolean; callId: string }>;
   calls: Map<string, { hash: string; id: string; result?: unknown }>;
   output?: Output; message?: AssistantMessage; timer?: ReturnType<typeof setTimeout>;
-  abort?: () => void; signal?: AbortSignal; failure?: string; toolCount: number;
+  abort?: () => void; signal?: AbortSignal; failure?: string;
 };
 const scopes = new Map<string, Scope>();
 const starting = new Map<string, AbortController>();
@@ -129,7 +129,6 @@ function handleRequest(scope: Scope, packet: CodexPacket, context: Context) {
     else scope.pending.get(previous.id)?.requestIds.push(packet.id);
     return;
   }
-  if (++scope.toolCount > 40) { fail(scope, "Codex 已达到单任务 40 次工具调用上限，请缩小任务"); return; }
   const id = randomUUID();
   scope.calls.set(p.callId, { hash: fingerprint, id });
   scope.pending.set(id, { requestIds: [packet.id], name: p.tool, arguments: p.arguments, delivered: false, callId: p.callId });
@@ -241,7 +240,7 @@ export function streamCodex(model: Model<any>, context: Context, options: Simple
         if (scopes.size >= 512) throw new Error("Codex 任务记录达到上限，请重启 Toonflow 后继续");
       }
       const { rpc, scratch } = await startCodex(model.id, false, signal);
-      scope = { rpc, threadId: "", modelId: model.id, prefix: hash(context.messages), tools: toolsHash, pending: new Map(), calls: new Map(), toolCount: 0 };
+      scope = { rpc, threadId: "", modelId: model.id, prefix: hash(context.messages), tools: toolsHash, pending: new Map(), calls: new Map() };
       scopes.set(taskId, scope);
       const current = scope;
       rpc.on("closed", (error: Error) => { if (current.output || current.pending.size) fail(current, error.message); });

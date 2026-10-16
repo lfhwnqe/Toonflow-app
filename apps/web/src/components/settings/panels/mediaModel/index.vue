@@ -21,7 +21,7 @@
             <el-tag v-if="item.version" size="small" type="info" effect="plain">v{{ item.version }}</el-tag>
             <el-text size="small" type="info">{{ item.models.length }} 个模型</el-text>
           </div>
-          <el-text v-if="item.id === 'codex'" size="small">沿用文本模型中的本机 Codex 设置；原生尺寸，9:16 构图</el-text>
+          <el-text v-if="item.id === 'codex'" size="small">默认图片模型，沿用本机 Codex 登录；可选比例及目标分辨率，实际像素以产物为准</el-text>
           <el-space v-else class="itemActions" wrap>
             <el-button v-if="item.modelsUrl" text :icon="IconDownload" :loading="fetchingFile === item.fileName" :disabled="!!fetchingFile || !!deletingFile || !!item.loadError || !item.revision" @click="fetchModels(item)">获取模型</el-button>
             <el-button text :icon="IconEdit" :disabled="!!fetchingFile || !!deletingFile || !!item.loadError" @click="editProvider(item)">编辑模型</el-button>

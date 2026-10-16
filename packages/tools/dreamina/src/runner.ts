@@ -1,11 +1,11 @@
 import { spawn } from "node:child_process";
-import { access, realpath, constants } from "@toonflow/file";
+import { access, appendFile, realpath, constants } from "@toonflow/file";
 import { isAbsolute, join } from "node:path";
 import { homedir } from "node:os";
 import { createHash, randomBytes } from "node:crypto";
 import { z } from "zod";
-import { fail } from "./store";
-import { configSchema } from "./runtime";
+import { fail, redact } from "./store";
+import { configSchema, errorCode } from "./runtime";
 
 const contractHash = "146f1d781d9ba69f6e18168d5aa8c90d251645475cf9bbe87bda5eecdd192399";
 
@@ -20,7 +20,11 @@ export function nodeIdValue(value: unknown): string {
 }
 
 export function validateConfig(config: Record<string, unknown>) {
-  const result = configSchema.parse(config);
+  // ACT: 兼容旧版保存的只读诊断字段，其余未知配置仍严格拒绝。
+  const normalized = { ...config };
+  delete normalized.readOnlyProjectId;
+  delete normalized.readOnlyNodeIds;
+  const result = configSchema.parse(normalized);
   if (result.executable && !isAbsolute(result.executable)) fail("absolute_executable_required");
   return result;
 }
@@ -62,9 +66,22 @@ function runProcess(executable: string, args: string[], options: { cwd: string; 
   });
 }
 
+const cliErrorSchema = z.object({
+  code: z.string().optional(), message: z.string().optional(), class: z.string().optional(),
+  retryable: z.boolean().optional(), requiredAction: z.string().optional(),
+  requestId: z.string().optional(), traceId: z.string().optional(),
+  validation: z.object({ reasonCode: z.string(), fieldPath: z.string().optional(), detail: z.string() }).optional(),
+});
+
+export class cliError extends Error {
+  constructor(readonly code: string, readonly diagnostic: z.infer<typeof cliErrorSchema>, readonly requestId?: string) {
+    super(diagnostic.message || "cli_failed");
+  }
+}
+
 const envelopeSchema = z.object({
   schemaVersion: z.literal("1"), ok: z.boolean(), data: z.record(z.string(), z.unknown()).optional(),
-  error: z.object({ code: z.string().optional() }).optional(),
+  error: cliErrorSchema.optional(),
   meta: z.object({ requestId: z.string().max(200).optional() }).optional(),
 });
 
@@ -82,9 +99,9 @@ function parseEnvelope(result: ProcessResult) {
   const envelope = parsed.data;
   if (result.exitCode !== 0 || !envelope.ok || !envelope.data) {
     const code = envelope.error?.code;
-    throw Object.assign(new Error("cli_failed"), {
-      code: code && /^[a-zA-Z0-9._-]{1,128}$/.test(code) ? code : "cli_failed", requestId: envelope.meta?.requestId,
-    });
+    const diagnostic = redact(envelope.error ?? {}) as z.infer<typeof cliErrorSchema>;
+    throw new cliError(code && /^[a-zA-Z0-9._-]{1,128}$/.test(code) ? code : "cli_failed", diagnostic,
+      diagnostic.requestId ?? envelope.meta?.requestId ?? diagnostic.traceId);
   }
   return envelope;
 }
@@ -106,7 +123,22 @@ export class cliRunner {
     const result = await runProcess(executable, ["--format", "json", "--non-interactive", "--profile", this.config.profile, "--region", this.config.region, ...args], {
       cwd: this.cwd, timeoutMs: this.config.timeoutMs, signal, env,
     });
-    const envelope = parseEnvelope(result);
+    let envelope;
+    try {
+      envelope = parseEnvelope(result);
+    } catch (error) {
+      if (error instanceof cliError) {
+        const command = args.slice(0, args[0] === "node" && ["create", "edit"].includes(args[1]) ? 3 : 2).join(" ");
+        const entry = JSON.stringify(redact({ time: new Date().toISOString(), command, exitCode: result.exitCode, ...error.diagnostic, code: error.code, requestId: error.requestId }));
+        console.error(`[dreamina] ${entry}`);
+        const directory = process.env.TOONFLOW_DATA_DIR;
+        if (directory && isAbsolute(directory)) {
+          try { await appendFile(join(directory, "dreaminaLog.jsonl"), `${entry}\n`, { mode: 0o600 }); }
+          catch (logError) { console.error(`[dreamina] 日志保存失败：${errorCode(logError)}`); }
+        }
+      }
+      throw error;
+    }
     this.requestId = envelope.meta?.requestId;
     if (args[0] === "schema" && createHash("sha256").update(result.stdout).digest("hex") !== contractHash) fail("schema_version_unknown");
     return envelope.data!;

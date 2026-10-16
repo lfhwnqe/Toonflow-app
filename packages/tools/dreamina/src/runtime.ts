@@ -8,15 +8,18 @@ export const planSchema = z.strictObject({
   storyboardVersion: businessId,
   mediaType: z.enum(["image", "video"]),
   model: z.string().min(1).max(200),
-  mode: z.enum(["t2i", "t2v"]),
-  prompt: z.string().min(1).max(2800).refine(value => !!value.trim()),
+  mode: z.enum(["t2i", "t2v", "m2v", "first_last_frame"]),
+  prompt: z.string().min(1).max(15000).refine(value => !!value.trim()),
   params: z.strictObject({
     ratio: z.string().min(1).max(100).optional(),
     resolution: z.string().min(1).max(100).optional(),
     duration: z.number().finite().positive().optional(),
     count: z.literal(1).optional(),
   }).default({}),
-  references: z.array(z.never()).max(0).default([]),
+  references: z.array(z.strictObject({
+    path: z.string().min(1).max(4096).describe("当前 Toonflow 工作区内的图片相对路径；按 {{ref 1}}、{{ref 2}} 的顺序排列"),
+    sha256: z.string().regex(/^[a-f0-9]{64}$/).optional().describe("由宿主计算，调用方可省略"),
+  })).max(30).default([]),
 });
 export type PlanInput = z.input<typeof planSchema>;
 export type Plan = z.output<typeof planSchema> & { projectKey: string };
@@ -43,7 +46,10 @@ export const modelSchema = z.object({
       min: z.number().optional(), max: z.number().optional(), step: z.number().positive().optional(),
       minLength: z.number().optional(), maxLength: z.number().optional(),
     }).passthrough()).default([]),
-    references: z.object({ min: z.number().optional() }).passthrough().optional(),
+    references: z.object({
+      min: z.number().optional(), max: z.number().optional(),
+      types: z.array(z.object({ mediaType: z.string(), min: z.number().optional(), max: z.number().optional() }).passthrough()).optional(),
+    }).passthrough().optional(),
   }).passthrough()),
 }).passthrough();
 export type Model = z.output<typeof modelSchema>;
@@ -58,7 +64,10 @@ export type Discovery = {
 };
 export const generationSchema = z.object({
   model: z.string(), mode: z.string(), prompt: z.string(), outputCount: z.number(),
-  references: z.array(z.unknown()).optional(), ratio: z.string().nullable().optional(),
+  references: z.array(z.object({
+    kind: z.string(), id: z.string().optional(), type: z.string().optional(), writebackSupported: z.boolean(),
+    resource: z.object({ resourceId: z.string(), type: z.string(), status: z.string() }).optional(),
+  })).optional(), ratio: z.string().nullable().optional(),
   resolution: z.string().nullable().optional(), durationSeconds: z.number().nullable().optional(),
 });
 export const resourcesSchema = z.array(z.object({ resourceId: z.string(), state: z.string().default("unknown") }));
@@ -72,7 +81,7 @@ export const showSchema = z.object({
 });
 export type CloudNode = z.infer<typeof nodeSchema>;
 export type Generation = {
-  model: string; mode: string; prompt: string; outputCount: number; references: never[];
+  model: string; mode: string; prompt: string; outputCount: number; references: string[];
   ratio: string | null; resolution: string | null; durationSeconds: number | null;
 };
 export const quoteSchema = z.object({
@@ -93,6 +102,7 @@ export interface Job {
   cost: { unit: "credits"; settled: null; authorizedCeiling?: number; quoted?: number };
   canceledLocal: boolean; integrity?: string; updateId?: string; submitUpdateId?: string; accountScopeHash?: string;
   hostCanvasId?: string | null; hostNodeId?: string; webUrl?: string | null;
+  references?: { path: string; sha256: string; snapshotPath: string; resourceId: string }[];
   storyboardApproval?: { approvedBy: "human"; approvedAt: string; planHash: string };
   generationHash?: string; effectiveGeneration?: Pick<Generation, "ratio" | "resolution" | "durationSeconds">;
   quote?: Quote; quoteExpiresAt?: string; approvalId?: string;

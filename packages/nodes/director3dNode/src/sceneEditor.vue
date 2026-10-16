@@ -29,6 +29,8 @@
             tabindex="0"
             aria-label="导演台场景"
             @click.left="toggleControl"
+            @mousemove="rotateCamera"
+            @mouseleave="!controls?.isLocked && exitControl()"
             @mousedown.right.prevent="addAnchor"
             @contextmenu.prevent
             @keydown="handleKeyDown"
@@ -37,7 +39,7 @@
             @wheel.prevent.stop="changeFocalLength" />
           <div v-if="captureFlash" :key="captureFlash" class="captureFlash" aria-hidden="true" @animationend="captureFlash = 0" />
           <div class="viewportInfo">
-            <span>{{ playing ? "播放中" : controlling ? "" : "点击画布取景" }}</span>
+            <span>{{ playing ? "播放中" : controlling ? "移动鼠标取景 · 左键 / Esc 退出" : "点击画布取景" }}</span>
             <span>{{ focalLength.toFixed(0) }} mm</span>
           </div>
           <div v-if="!ready" class="stageLoading">
@@ -168,7 +170,7 @@ import directorPanel from "./directorPanel.vue";
 import directorTour from "./directorTour.vue";
 import lightDirection from "./lightDirection.vue";
 import { VueDraggable } from "vue-draggable-plus";
-import { Vector3 } from "three";
+import { Euler, Vector3 } from "three";
 import { PointerLockControls } from "three/examples/jsm/controls/PointerLockControls.js";
 import type { SceneRuntime } from "threejson/core";
 import type { NodeAiModel } from "@toonflow/nodes-scaffold/runtime";
@@ -219,6 +221,9 @@ const pressedKeys = new Set<string>();
 const moveKeys = new Set(["KeyW", "KeyA", "KeyS", "KeyD", "Space", "ShiftLeft", "ShiftRight"]);
 const focalSteps = [...Array.from({ length: 30 }, (_, index) => index + 6), 40, 45, 50, 55, 60, 65, 70, 80, 90, 100, 110];
 const movement = new Vector3();
+const cameraRotation = new Euler(0, 0, 0, "YXZ");
+let pointerLockAvailable = true;
+let pointerPosition: { x: number; y: number } | undefined;
 let runtime: SceneRuntime | undefined;
 let loadedScene: SceneDocument | undefined;
 let controls: PointerLockControls | undefined;
@@ -265,8 +270,7 @@ async function loadScene() {
     controls = new PointerLockControls(runtime.camera, canvas.value);
     controls.addEventListener("change", () => runtime?.invalidate());
     controls.addEventListener("lock", () => {
-      controlling.value = true;
-      activeAnchorId.value = "";
+      if (!controlling.value) exitControl();
     });
     controls.addEventListener("unlock", () => {
       controlling.value = false;
@@ -315,7 +319,7 @@ function updateFrame() {
     sampleTime();
     if (currentTime.value >= props.result.duration) playing.value = false;
   }
-  if (!runtime || !controls?.isLocked || !pressedKeys.size) return;
+  if (!runtime || !controls || !controlling.value || !pressedKeys.size) return;
   movement
     .set(
       Number(pressedKeys.has("KeyD")) - Number(pressedKeys.has("KeyA")),
@@ -343,14 +347,29 @@ async function toggleControl() {
   pausePlayback();
   manualCamera.value = true;
   canvas.value.focus({ preventScroll: true });
+  controlling.value = true;
+  activeAnchorId.value = "";
+  if (!pointerLockAvailable || !canvas.value.requestPointerLock) return;
   try {
     await canvas.value.requestPointerLock();
-  } catch (error) {
-    if (!disposed) ElMessage.error(error instanceof Error ? error.message : "无法进入第一人称取景");
+  } catch {
+    // ACT: 部分 WebView 拒绝鼠标锁定，改用画面内鼠标增量；移出画面即退出，不能无限转向。
+    pointerLockAvailable = false;
   }
+}
+function rotateCamera(event: MouseEvent) {
+  const previous = pointerPosition;
+  pointerPosition = { x: event.clientX, y: event.clientY };
+  if (!runtime || !controlling.value || controls?.isLocked || !previous) return;
+  cameraRotation.setFromQuaternion(runtime.camera.quaternion);
+  cameraRotation.y -= (event.clientX - previous.x) * 0.002;
+  cameraRotation.x = Math.max(-Math.PI / 2, Math.min(Math.PI / 2, cameraRotation.x - (event.clientY - previous.y) * 0.002));
+  runtime.camera.quaternion.setFromEuler(cameraRotation);
+  runtime.invalidate();
 }
 function exitControl() {
   pressedKeys.clear();
+  pointerPosition = undefined;
   controlling.value = false;
   if (document.pointerLockElement === canvas.value) document.exitPointerLock();
 }

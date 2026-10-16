@@ -3,7 +3,8 @@ import type { QuestionRequest, ToolContext } from "@toonflow/tools-scaffold/runt
 import { mediaClient } from "./mediaClient";
 import { openExecutionVault } from "./executionVault";
 import { createNodeId, nodeIdValue } from "./runner";
-import { validatePlan } from "./plan";
+import { generationPrompt, generationReferences, validatePlan } from "./plan";
+import { validateMedia } from "./collect";
 import { jobStore, fail, hash, uuid, canonical } from "./store";
 import { errorCode, quoteSchema, type Auth, type CloudNode, type Discovery, type ExecutionVault, type Generation, type Job, type Plan, type PlanInput, type Quote } from "./runtime";
 
@@ -23,16 +24,21 @@ export function checkQuote(value: unknown, nodeId: string | null): Quote {
   return { nodeId: nodeIdValue(nodeId), totalMaxCredits: quote.totalMaxCredits, draftVersion: quote.draftVersion };
 }
 
-export function generationSnapshot(plan: Plan, node: CloudNode | undefined): Generation {
+export function generationSnapshot(plan: Plan, node: CloudNode | undefined, job: Job): Generation {
   if (!node || node.type !== plan.mediaType || !node.generation)
     fail("draft_unreadable");
   const g = node.generation;
-  if (g.model !== plan.model || g.mode !== plan.mode || g.prompt !== plan.prompt || g.outputCount !== 1 || (g.references ?? []).length)
+  const references = generationReferences(plan, job);
+  const saved = g.references ?? [];
+  if (g.model !== plan.model || g.mode !== plan.mode || g.prompt !== generationPrompt(plan, job) || g.outputCount !== 1 || saved.length !== references.length)
     fail("cloud_plan_mismatch");
+  if (saved.some((reference, index) => !reference.writebackSupported ||
+    (reference.resource?.resourceId ?? reference.id) !== references[index] ||
+    (reference.resource?.type ?? reference.type) !== "image")) fail("cloud_reference_mismatch");
   for (const [key, field] of [["ratio", "ratio"], ["resolution", "resolution"], ["duration", "durationSeconds"]] as const)
     if (plan.params[key] !== undefined && g[field] !== plan.params[key])
       fail("cloud_plan_mismatch");
-  return { model: g.model, mode: g.mode, prompt: g.prompt, outputCount: g.outputCount, references: [], ratio: g.ratio ?? null, resolution: g.resolution ?? null, durationSeconds: g.durationSeconds ?? null };
+  return { model: g.model, mode: g.mode, prompt: g.prompt, outputCount: g.outputCount, references, ratio: g.ratio ?? null, resolution: g.resolution ?? null, durationSeconds: g.durationSeconds ?? null };
 }
 
 export function publicCanvasUrl(value: unknown) {
@@ -67,17 +73,23 @@ export class mediaWorkflow {
     if (v.version !== "1.0.3" || v.commit !== "244064d" || v.distribution !== "cn")
       fail("cli_version_unknown");
     if (!this.client.config.readOnlyOnline)
-      return { projectKey: this.projectKey, version: v.version, readOnlyOnline: false, liveGeneration: false, enabledModes: ["t2i", "t2v"] };
+      return { projectKey: this.projectKey, version: v.version, readOnlyOnline: false, liveGeneration: false, enabledModes: ["t2i", "t2v", "m2v", "first_last_frame"] };
     const auth = await this.client.auth(signal);
     if (auth.profile !== this.client.config.profile || auth.region !== this.client.config.region)
       fail("account_scope_unverified");
     const scopeHash = sessionScope(auth);
-    const result: Discovery = { projectKey: this.projectKey, version: v.version, readOnlyOnline: true, liveGeneration: this.client.config.liveGeneration, profile: auth.profile, region: auth.region, scopeHash, enabledModes: ["t2i", "t2v"] };
+    const result: Discovery = { projectKey: this.projectKey, version: v.version, readOnlyOnline: true, liveGeneration: this.client.config.liveGeneration, profile: auth.profile, region: auth.region, scopeHash, enabledModes: ["t2i", "t2v", "m2v", "first_last_frame"] };
     if (catalog) {
       result.models = [];
       for (const type of ["image", "video"] as const) {
         const data = await this.client.models(type, signal);
-        result.models.push(...data.items.map(model => ({ ...model, modes: model.modes.filter(mode => ["t2i", "t2v"].includes(mode.name)) })).filter(model => model.modes.length));
+        result.models.push(...data.items.map(model => ({ ...model, modes: model.modes.filter(mode => result.enabledModes.includes(mode.name)).map(mode => ({
+          ...mode,
+          ...(mode.references ? { references: { ...mode.references,
+            max: Math.min(mode.references.max ?? 0, mode.references.types?.find(type => type.mediaType === "image")?.max ?? 0, 30),
+            types: mode.references.types?.filter(type => type.mediaType === "image"),
+          } } : {}),
+        })) })).filter(model => model.modes.length));
       }
     }
     return result;
@@ -98,15 +110,28 @@ export class mediaWorkflow {
     return plan;
   }
 
-  summary(plan: Plan) { return `${plan.shotId} / ${plan.storyboardVersion}\n${plan.mediaType === "image" ? "图片" : "视频"} · ${plan.model} · ${plan.mode}\n${JSON.stringify(plan.params)}\n${plan.prompt}\n输出1份；使用当前 ${this.client.config.profile} 登录账号 / ${this.client.config.region}。`; }
+  summary(plan: Plan) { return `${plan.shotId} / ${plan.storyboardVersion}\n${plan.mediaType === "image" ? "图片" : "视频"} · ${plan.model} · ${plan.mode}\n${JSON.stringify(plan.params)}\n${plan.prompt}\n参考图（按顺序）：${plan.references.map((reference, index) => `${index + 1}. ${reference.path}`).join("；") || "无"}\n输出1份；使用当前 ${this.client.config.profile} 登录账号 / ${this.client.config.region}。`; }
   async prepare(input: PlanInput, callId: string, signal?: AbortSignal) {
     await this.ready();
     const d = await this.discover(signal, true);
     if (!d.models)
       fail("readonly_online_disabled");
-    const { plan, planHash } = validatePlan({ ...input, projectKey: input.projectKey ?? this.projectKey }, d.models, this.projectKey);
-    if (/(?<!\\)\{\{/.test(plan.prompt))
-      fail("inline_reference_not_enabled");
+    const validated = validatePlan({ ...input, projectKey: input.projectKey ?? this.projectKey }, d.models, this.projectKey).plan;
+    const snapshots: NonNullable<Job["references"]> = [];
+    for (const reference of validated.references) {
+      const metadata = await validateMedia(this.context, reference.path, "image", signal);
+      if (reference.sha256 && reference.sha256 !== metadata.sha256) fail("reference_snapshot_mismatch");
+      const snapshotPath = `integration/references/${metadata.sha256}.${metadata.extension}`;
+      await this.context.files.mkdir("integration/references", true);
+      try { await this.context.files.copyFile(reference.path, snapshotPath, true); }
+      catch (error) { if (errorCode(error) !== "EEXIST") throw error; }
+      const snapshot = await validateMedia(this.context, snapshotPath, "image", signal);
+      if (snapshot.sha256 !== metadata.sha256) fail("reference_snapshot_mismatch");
+      reference.sha256 = metadata.sha256;
+      snapshots.push({ path: reference.path, sha256: metadata.sha256, snapshotPath, resourceId: randomUUID() });
+    }
+    const plan = validated;
+    const planHash = hash(plan);
     await this.context.files.mkdir("integration/plans", true);
     try {
       await this.context.files.writeFile(`integration/plans/${planHash}.json`, `${canonical(plan)}\n`, true);
@@ -133,7 +158,7 @@ export class mediaWorkflow {
       if (job.canceledLocal || job.remoteProjectId)
         fail("prepare_reconciliation_required");
       const approval = "确认这份分镜，保存到即梦（不生成、不扣分）";
-      const ok = await this.ask(callId, { title: "确认镜头并保存即梦草稿", question: `${this.summary(plan)}\n\n将把上述提示词发至即梦 cn 服务，并新建一个独立云画布及节点。本步骤不运行生成。`, options: [approval, "暂不保存"] }, approval, signal);
+      const ok = await this.ask(callId, { title: "确认镜头并保存即梦草稿", question: `${this.summary(plan)}\n\n将把上述提示词及 ${plan.references.length} 张参考图的固定副本发至即梦 cn 服务，并新建一个独立云画布及节点。本步骤不运行生成。`, options: [approval, "暂不保存"] }, approval, signal);
       if (!ok) {
         job.state = "draft";
         await this.store.save(job);
@@ -147,6 +172,7 @@ export class mediaWorkflow {
       job.updateId = randomUUID();
       job.submitUpdateId = randomUUID();
       job.accountScopeHash = current.scopeHash;
+      job.references = snapshots;
       job.hostCanvasId = this.context.canvas?.id ?? null;
       job.state = "preparing";
       job.storyboardApproval = { approvedBy: "human", approvedAt: new Date().toISOString(), planHash };
@@ -157,6 +183,12 @@ export class mediaWorkflow {
           fail("canvas_identity_mismatch");
         job.webUrl = publicCanvasUrl(canvas.project.webUrl);
         await this.store.save(job);
+        for (const reference of job.references) {
+          const metadata = await validateMedia(this.context, reference.snapshotPath, "image", signal);
+          if (metadata.sha256 !== reference.sha256) fail("reference_snapshot_mismatch");
+          const uploaded = await this.client.upload(job, reference.resourceId, await this.context.resolvePath(reference.snapshotPath), reference.path.split("/").at(-1)!, signal);
+          if (uploaded.resourceId !== reference.resourceId || uploaded.mediaType !== "image") fail("uploaded_reference_mismatch");
+        }
         const saved = await this.client.save(plan, job, signal);
         if (saved.node?.nodeId !== job.nodeId)
           fail("node_identity_mismatch");
@@ -182,7 +214,7 @@ export class mediaWorkflow {
     const item = matches[0];
     if (item.result !== "FOUND" || item.node?.nodeId !== job.nodeId || (item.nodeId !== undefined && item.nodeId !== job.nodeId))
       fail("draft_unreadable");
-    return { generation: generationSnapshot(plan, item.node), draftVersion: data.draftVersion };
+    return { generation: generationSnapshot(plan, item.node, job), draftVersion: data.draftVersion };
   }
 
   async checked(job: Job, signal?: AbortSignal) {
@@ -326,7 +358,7 @@ export class mediaWorkflow {
       fail("draft_unreadable");
     if ((Array.isArray(item.node.resources) && item.node.resources.length) || (typeof item.node.status === "string" && item.node.status !== "empty"))
       fail("cloud_generation_present", "云节点已有生成或资源记录，不能按未提交草稿恢复；请保留原记录并人工核对，不会自动重新生成。");
-    const generation = generationSnapshot(plan, item.node);
+    const generation = generationSnapshot(plan, item.node, job);
     if (job.generationHash && hash(generation) !== job.generationHash)
       fail("cloud_plan_changed");
     const webUrl = publicCanvasUrl(canvas.webUrl);

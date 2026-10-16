@@ -7,7 +7,7 @@
         <button v-for="option in tool.question.options" :key="option" type="button" :disabled="busy || !canAnswer" @click="answer(option)">{{ option }}</button>
         <button type="button" :disabled="busy || !canAnswer" @click="answer('', true)">跳过，不执行</button>
       </div>
-      <p v-else>{{ submitted ? '回答已提交，正在核验…' : '此确认已结束；执行情况以工具结果为准。' }}</p>
+      <p v-else>{{ submitted && tool.status === 'running' ? '回答已提交，正在核验…' : '此确认已结束；执行情况以工具结果为准。' }}</p>
     </template>
     <p v-if="error" role="alert">{{ error }}</p>
     <pre v-if="tool.result">{{ tool.result }}</pre>

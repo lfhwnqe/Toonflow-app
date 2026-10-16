@@ -4,7 +4,7 @@ import { mkdir, readFile, unlink, writeAtomic } from "@toonflow/file";
 import conf from "@/utils/conf";
 import { getRequestFiles, getRequestFileReferences } from "@/utils/ai/requestFiles";
 
-export type FileProvider = { apiUrl: string; apiKey: string; protocol: string };
+export type FileProvider = { id?: string; apiUrl: string; apiKey: string; protocol: string };
 export class FileRequestLimitError extends Error {
   constructor(readonly excessBytes: number, readonly excessCount: number, message = "输入图片超过供应商的请求限制") {
     super(message);
@@ -137,6 +137,9 @@ function replaceFileIds(payload: unknown, replacements: Map<string, string>): bo
 }
 
 export function getUnsupportedFileText(provider: FileProvider, file: { path: string; mimeType: string }) {
+  if (provider.id === "codex" && file.mimeType.toLowerCase().startsWith("video/")) {
+    return `视频文件：${file.path}。当前 Codex 聊天入口不接收视频输入；这里只提供工作区文件路径，尚未读取或理解视频画面和声音。可通过工具查询媒体信息、按需提取关键帧，或将此文件作为支持视频参考的生成模型输入；不能仅凭文件存在声称已看过视频或确认剧情、对白与结束状态。`;
+  }
   return adapters.find(adapter => adapter.accepts(provider))?.unsupported(file);
 }
 

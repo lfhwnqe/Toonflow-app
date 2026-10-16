@@ -2,13 +2,17 @@
 name: v118workflow
 description: 融合 Toonflow v1.1.8 的编剧方法、12 类叙事技法、11 种美术风格及资产、分镜、图像和视频提示词知识，将小说或剧本逐阶段制作并确认。统一维护剧本画布、资产画布和每集制作画布；用于旧版流程复现、分集制作或续作，讨论或编辑技能本身时不启动制作。
 metadata:
-  version: "1.1.0"
+  version: "1.1.2"
   displayName: v1.1.8 分集制作流程
   author: Toonflow
   github: https://github.com/HBAI-Ltd/Toonflow-app
 ---
 
 # v1.1.8 分集制作流程
+
+图片模型遵循宿主默认 Codex 的规则，按实时能力设置比例和目标分辨率；用户明确选择其他图片模型时沿用。
+
+视频生成遵循宿主默认即梦 CLI 的路由：先查询 dreaminaCapabilities，再用 dreaminaPrepare → dreaminaQuote → dreaminaSubmit → dreaminaStatus → dreaminaCollect。参考图使用工作区真实路径并按 {{ref N}} 顺序提交，由工具固定、上传并核对。Toonflow 画布保存方案与结果；仅用户明确选择 API 供应商时使用普通视频生成节点。即梦能力不足时说明缺口，不自动换供应商或丢弃参考。
 
 把旧版的「编剧流水线 + 制作流水线 + 视频工作台」转换为当前 Toonflow 的画布操作。每步执行顺序是：**读已确认输入 → 完成本阶段 → 保存到指定画布 → 回读并检查 → 展示结果 → 等待用户确认**。聊天摘要不能代替画布成果，任务启动不能代替媒体成功。
 

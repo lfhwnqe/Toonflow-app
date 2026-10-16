@@ -163,7 +163,7 @@ export async function collect(workflow: mediaWorkflow, jobKey: string, callId: s
         if (job.importPhase === "creating_node")
           fail("host_node_reconciliation_required");
         const overview = await call("getCanvas", { canvasId: canvas.id, include: ["nodeTypes"], limit: 100 });
-        const type = `${job.mediaType}Node`;
+        const type = `remote-${job.mediaType}Node`;
         if (!overview.availableNodeTypes?.some(item => item.type === type))
           fail("host_media_node_unavailable");
         job.importPhase = "creating_node";

@@ -53,7 +53,7 @@
           @remove="removeReference" />
         <promptInput v-if="editor?.mode === 'inpaint'" v-model="data.inpaintPromptModel" v-model:text="data.inpaintPrompt" :references="referenceMentions" expandable />
         <promptInput v-else v-model="data.promptModel" v-model:text="data.prompt" :references="referenceMentions" expandable />
-        <el-text v-if="codexTextOnly" size="small" type="info">单张文生图 · 9:16 构图 · {{ outputSize || "原生像素尺寸以产物为准" }}；单回合可能包含多次内部图片调用。</el-text>
+        <el-text v-if="codexTextOnly" size="small" type="info">目标 {{ data.ratio }} · {{ data.size }}，通过生成指令指定，实际像素以产物为准{{ outputSize ? `（当前产物 ${outputSize}）` : '' }}；单回合可能包含多次内部图片调用。</el-text>
         <el-alert v-if="unsupportedCodexInput" title="Codex 暂不支持参考图或局部重绘，请移除图片参考或切换模型" type="warning" :closable="false" />
         <div class="promptFooter">
           <el-select
@@ -190,10 +190,10 @@ watch(
   (choice) => {
     if (!choice) return;
     // ACT: 现有分辨率使用 K 单位；出现其他单位时再统一换算，未知名称排在数值选项之后。
-    if (!sizeOptions.value.includes(data.value.size)) data.value.size = sizeOptions.value.toSorted((left, right) =>
+    if (!sizeOptions.value.includes(data.value.size)) data.value.size = choice.providerId === "codex" ? "原生尺寸" : sizeOptions.value.toSorted((left, right) =>
       (Number.parseFloat(left) || Infinity) - (Number.parseFloat(right) || Infinity)
     )[0]!;
-    if (!ratioOptions.value.includes(data.value.ratio)) data.value.ratio = ratioOptions.value.includes("16:9") ? "16:9" : ratioOptions.value[0]!;
+    if (!ratioOptions.value.includes(data.value.ratio)) data.value.ratio = choice.providerId === "codex" ? "9:16" : ratioOptions.value.includes("16:9") ? "16:9" : ratioOptions.value[0]!;
   },
   { flush: "sync" }
 );
@@ -426,7 +426,7 @@ function getConfig() {
 
 nodeTools.register({
   name: "getConfig",
-  description: "读取此图片生成节点的当前模型、分辨率、比例及可选图片模型能力，不含密钥；Codex 使用原生尺寸、9:16 构图，实际像素尺寸由原生能力决定",
+  description: "读取此图片生成节点的当前模型、分辨率、比例及可选图片模型能力，不含密钥；未指定模型时默认 Codex。Codex 支持选择比例和原生尺寸、1K、2K、4K 目标分辨率，通过生成指令传入，实际像素以产物为准；暂不支持图片参考",
   parameters: z.strictObject({}),
   async execute(_args, { signal }) {
     signal?.throwIfAborted();

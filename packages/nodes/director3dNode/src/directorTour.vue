@@ -33,7 +33,7 @@ const steps = [
   {
     target: ".viewport",
     title: "第一人称取景",
-    description: "点击三维画面后，用鼠标调整朝向。WASD 移动，空格上升，Shift 下降，滚轮调焦；左键或 Esc 退出取景。",
+    description: "点击三维画面后，用鼠标调整朝向。WASD 移动，空格上升，Shift 下降，滚轮调焦；左键或 Esc 退出取景。宿主不允许鼠标锁定时，移出画面也会退出，重新点击可继续取景。",
   },
   {
     target: ".stagePanel .referenceList",
