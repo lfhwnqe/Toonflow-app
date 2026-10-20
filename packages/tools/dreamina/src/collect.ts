@@ -169,7 +169,8 @@ export async function collect(workflow: mediaWorkflow, jobKey: string, callId: s
         job.importPhase = "creating_node";
         job.hostCanvasId = canvas.id;
         await workflow.store.save(job);
-        const created = await call("addNode", { type, label, position: { x: 100, y: 100 } });
+        // 省略 position：由画布宿主自动放到不重叠的空位，避免多次导入的素材节点堆叠在同一点。
+        const created = await call("addNode", { type, label });
         if (!created.node?.id)
           fail("host_node_receipt_missing");
         job.hostNodeId = created.node.id;

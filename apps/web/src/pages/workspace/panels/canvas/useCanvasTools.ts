@@ -55,6 +55,37 @@ export function useCanvasTools(options: {
     return { x: Math.round(position.x / x) * x, y: Math.round(position.y / y) * y };
   }
 
+  // ACT: 省略坐标时自动找一个不重叠的网格空位，避免 Agent 新增节点全部堆叠在同一点。
+  function freePosition(): XYPosition {
+    const occupied = flow.getNodes.value
+      .filter(node => !node.parentNode)
+      .map(node => ({ x: node.computedPosition.x, y: node.computedPosition.y, w: node.dimensions.width || 240, h: node.dimensions.height || 200 }));
+    const step = 60;
+    for (let col = 0; ; col++) {
+      const x = 80 + col * 320;
+      for (let row = 0; row < 12; row++) {
+        const y = 80 + row * 240;
+        if (!occupied.some(item => x < item.x + item.w + step && x + 240 + step > item.x && y < item.y + item.h + step && y + 200 + step > item.y)) {
+          return { x, y };
+        }
+      }
+    }
+  }
+
+  // 远端节点异步挂载后才把端口写进 data.handles；连线前轮询等待，避免“刚建点就连线”因端口未就绪而失败。
+  function waitForHandles(nodeId: string, signal: AbortSignal, timeoutMs = 3000): Promise<void> {
+    return new Promise((resolve, reject) => {
+      const start = Date.now();
+      const check = () => {
+        if (signal.aborted) return reject(signal.reason);
+        if (Array.isArray(flow.findNode(nodeId)?.data.handles) && (flow.findNode(nodeId)?.data.handles as unknown[]).length) return resolve();
+        if (Date.now() - start >= timeoutMs) return resolve();
+        setTimeout(check, 30);
+      };
+      check();
+    });
+  }
+
   return (id: string, canvasSignal: AbortSignal, workspaceSignal: AbortSignal): CanvasContext => {
     let redirected: CanvasContext | undefined;
     return {
@@ -142,10 +173,39 @@ export function useCanvasTools(options: {
         const type = options.availableNodes.value.find(node => node.type === args.type);
         if (!type) throw new Error("节点类型未启用或尚未加载，请先查询 getCanvas");
         const id = crypto.randomUUID();
-        flow.addNodes({ id, type: type.type, position: nodePosition(args.position), data: { label: args.label ?? type.label } });
+        flow.addNodes({ id, type: type.type, position: args.position ? nodePosition(args.position) : freePosition(), data: { label: args.label ?? type.label } });
         await nextTick();
         signal.throwIfAborted();
-        return nodeInfo(id);
+        const info = nodeInfo(id);
+        if (!args.connect?.length) return info;
+        await waitForHandles(id, signal);
+        signal.throwIfAborted();
+        const targetNode = findNode(id);
+        const edges = [...flow.getEdges.value];
+        const entries = args.connect.map(item => {
+          const sourceNode = findNode(item.source);
+          const connection = { source: item.source, sourceHandle: item.sourceHandle, target: id, targetHandle: item.targetHandle };
+          if (!flow.nodesConnectable.value || sourceNode.connectable === false || targetNode.connectable === false) {
+            throw new Error(`节点不允许连接：${item.source} -> ${id}`);
+          }
+          const existing = edges.find(edge => edge.source === connection.source && edge.target === connection.target
+            && edge.sourceHandle === connection.sourceHandle && edge.targetHandle === connection.targetHandle);
+          if (existing) return { id: existing.id, connection, isNew: false };
+          if (!validateConnection(connection, { sourceNode, targetNode, nodes: flow.getNodes.value, edges })) {
+            throw new Error(`连接无效：${item.source} -> ${id}，请检查端口方向、数据类型以及目标节点的连接规则`);
+          }
+          const edgeId = crypto.randomUUID();
+          // ACT: 候选边只参与本批校验，全部通过后再一次提交画布。
+          edges.push({
+            ...connection, id: edgeId, type: "default", selected: false, data: {}, events: {}, sourceNode, targetNode,
+            sourceX: sourceNode.computedPosition.x, sourceY: sourceNode.computedPosition.y,
+            targetX: targetNode.computedPosition.x, targetY: targetNode.computedPosition.y,
+          });
+          return { id: edgeId, connection, isNew: true };
+        });
+        flow.addEdges(entries.filter(entry => entry.isNew).map(entry => ({ id: entry.id, ...entry.connection })));
+        await nextTick();
+        return { ...info, edges: entries.map(entry => canvasEdgeSummary(flow.findEdge(entry.id)!)) };
       }
       case "deleteNodes": {
         const { nodeIds } = canvasSchemas.deleteNodes.parse(request.args);
